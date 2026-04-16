@@ -1,0 +1,51 @@
+name: AI Code Review
+on:
+  workflow_call:
+    secrets:
+      ANTHROPIC_API_KEY:
+        required: true
+
+jobs:
+  spec-conformance:
+    name: Spec Conformance Check
+    runs-on: ubuntu-latest
+    if: contains(github.event.pull_request.body, 'Spec:')
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Extract spec reference from PR body
+        id: spec-ref
+        run: |
+          SPEC_REF=$(echo "${{ github.event.pull_request.body }}" | grep -oP 'Spec:\s*\K\S+' || echo "")
+          echo "spec_ref=$SPEC_REF" >> "$GITHUB_OUTPUT"
+          if [ -z "$SPEC_REF" ]; then
+            echo "No spec reference found in PR body. Skipping conformance check."
+            exit 0
+          fi
+
+      - name: Fetch HLTC from devkit
+        if: steps.spec-ref.outputs.spec_ref != ''
+        run: |
+          gh api repos/truckbay/truckbays-devkit/contents/openspec/changes/${{ steps.spec-ref.outputs.spec_ref }}/hltc.md \
+            --jq '.content' | base64 -d > /tmp/hltc.md
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Claude Code spec conformance review
+        if: steps.spec-ref.outputs.spec_ref != ''
+        uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          prompt: |
+            You are a spec-conformance reviewer. Review this PR against the
+            High-Level Technical Contract at /tmp/hltc.md.
+
+            Check:
+            1. All requirements from the HLTC are implemented
+            2. No behavior beyond the approved contract was introduced
+            3. Error handling matches the spec
+            4. Input/output shapes match the spec
+            5. Architectural placement matches the spec
+
+            Report ONLY discrepancies. Do NOT evaluate code style or quality
+            (CodeRabbit handles that). If everything conforms, say "Spec conformance: PASS".

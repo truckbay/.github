@@ -1,0 +1,30 @@
+name: AI Security Scan
+on:
+  workflow_call:
+    secrets:
+      ANTHROPIC_API_KEY:
+        required: true
+
+jobs:
+  security-review:
+    name: Security Review
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Claude Code security review
+        uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          prompt: |
+            Review this PR for security vulnerabilities. Focus on:
+            1. SQL injection (especially raw Sequelize queries)
+            2. Authentication/authorization bypasses
+            3. Sensitive data exposure (API keys, tokens, PII in logs)
+            4. Input validation gaps
+            5. IDOR (Insecure Direct Object References)
+            6. Rate limiting on new endpoints
+
+            Report only real, exploitable issues. Do not flag theoretical
+            concerns or style preferences. For each issue, state the file,
+            line, vulnerability type, and suggested fix.

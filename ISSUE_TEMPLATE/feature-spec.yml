@@ -1,0 +1,31 @@
+name: Feature Spec
+description: Propose a new feature through the SDD workflow
+title: "[SPEC] "
+labels: ["spec", "needs-refinement"]
+body:
+  - type: textarea
+    id: user-story
+    attributes:
+      label: User Story / Idea
+      description: Describe what you want to build. Can be as vague as a sentence or as detailed as a full user story.
+      placeholder: "As a trucker, I want to..."
+    validations:
+      required: true
+  - type: input
+    id: linear-ticket
+    attributes:
+      label: Linear Ticket
+      description: Link to the Linear ticket (if exists)
+      placeholder: "TRU-XXXX"
+  - type: dropdown
+    id: affected-repos
+    attributes:
+      label: Affected Repos (estimated)
+      multiple: true
+      options:
+        - truckbays-api
+        - truckbay-web
+        - Truckbays-Mobile-App
+        - warehouses
+        - infrastructure
+        - unknown

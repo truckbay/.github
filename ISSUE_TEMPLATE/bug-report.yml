@@ -1,0 +1,32 @@
+name: Bug Report
+description: Report a bug
+title: "[BUG] "
+labels: ["bug"]
+body:
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: What happened vs what should have happened
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to Reproduce
+    validations:
+      required: true
+  - type: input
+    id: linear-ticket
+    attributes:
+      label: Linear Ticket
+      placeholder: "TRU-XXXX"
+  - type: dropdown
+    id: affected-repo
+    attributes:
+      label: Affected Repo
+      options:
+        - truckbays-api
+        - truckbay-web
+        - Truckbays-Mobile-App
+        - warehouses
