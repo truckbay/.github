@@ -9,6 +9,11 @@ jobs:
   spec-conformance:
     name: Spec Conformance Check
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: write
+      id-token: write
     if: contains(github.event.pull_request.body, 'Spec:')
     steps:
       - uses: actions/checkout@v4
