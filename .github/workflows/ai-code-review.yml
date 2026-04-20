@@ -5,7 +5,7 @@ on:
       ANTHROPIC_API_KEY:
         required: true
       DEVKIT_READ_TOKEN:
-        required: true
+        required: false
 
 jobs:
   spec-conformance:
@@ -32,8 +32,20 @@ jobs:
             exit 0
           fi
 
+      - name: Check DEVKIT_READ_TOKEN availability
+        id: check-token
+        env:
+          HAS_TOKEN: ${{ secrets.DEVKIT_READ_TOKEN != '' }}
+        run: |
+          if [ "$HAS_TOKEN" = "true" ]; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::DEVKIT_READ_TOKEN not provided — skipping HLTC fetch and spec conformance review."
+            echo "available=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Fetch HLTC from devkit
-        if: steps.spec-ref.outputs.spec_ref != ''
+        if: steps.spec-ref.outputs.spec_ref != '' && steps.check-token.outputs.available == 'true'
         run: |
           gh api repos/truckbay/truckbays-devkit/contents/openspec/changes/${{ steps.spec-ref.outputs.spec_ref }}/hltc.md \
             --jq '.content' | base64 -d > /tmp/hltc.md
@@ -41,7 +53,7 @@ jobs:
           GH_TOKEN: ${{ secrets.DEVKIT_READ_TOKEN }}
 
       - name: Claude Code spec conformance review
-        if: steps.spec-ref.outputs.spec_ref != ''
+        if: steps.spec-ref.outputs.spec_ref != '' && steps.check-token.outputs.available == 'true'
         uses: anthropics/claude-code-action@v1
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
