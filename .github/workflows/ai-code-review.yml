@@ -26,6 +26,10 @@ jobs:
           PR_BODY: ${{ github.event.pull_request.body }}
         run: |
           SPEC_REF=$(echo "$PR_BODY" | grep -oP 'Spec:\s*\K\S+' || echo "")
+          if [ -n "$SPEC_REF" ] && ! [[ "$SPEC_REF" =~ ^[A-Za-z0-9._-]+$ ]]; then
+            echo "::error::Invalid spec reference format: '$SPEC_REF'"
+            exit 1
+          fi
           echo "spec_ref=$SPEC_REF" >> "$GITHUB_OUTPUT"
           if [ -z "$SPEC_REF" ]; then
             echo "No spec reference found in PR body. Skipping conformance check."
@@ -34,6 +38,7 @@ jobs:
 
       - name: Check DEVKIT_READ_TOKEN availability
         id: check-token
+        if: steps.spec-ref.outputs.spec_ref != ''
         env:
           HAS_TOKEN: ${{ secrets.DEVKIT_READ_TOKEN != '' }}
         run: |
@@ -47,7 +52,7 @@ jobs:
       - name: Fetch HLTC from devkit
         if: steps.spec-ref.outputs.spec_ref != '' && steps.check-token.outputs.available == 'true'
         run: |
-          gh api repos/truckbay/truckbays-devkit/contents/openspec/changes/${{ steps.spec-ref.outputs.spec_ref }}/hltc.md \
+          gh api "repos/truckbay/truckbays-devkit/contents/openspec/changes/${{ steps.spec-ref.outputs.spec_ref }}/hltc.md" \
             --jq '.content' | base64 -d > /tmp/hltc.md
         env:
           GH_TOKEN: ${{ secrets.DEVKIT_READ_TOKEN }}
