@@ -20,8 +20,10 @@ jobs:
 
       - name: Extract spec reference from PR body
         id: spec-ref
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
         run: |
-          SPEC_REF=$(echo "${{ github.event.pull_request.body }}" | grep -oP 'Spec:\s*\K\S+' || echo "")
+          SPEC_REF=$(echo "$PR_BODY" | grep -oP 'Spec:\s*\K\S+' || echo "")
           echo "spec_ref=$SPEC_REF" >> "$GITHUB_OUTPUT"
           if [ -z "$SPEC_REF" ]; then
             echo "No spec reference found in PR body. Skipping conformance check."
