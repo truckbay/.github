@@ -4,6 +4,8 @@ on:
     secrets:
       ANTHROPIC_API_KEY:
         required: true
+      DEVKIT_READ_TOKEN:
+        required: true
 
 jobs:
   spec-conformance:
@@ -36,7 +38,7 @@ jobs:
           gh api repos/truckbay/truckbays-devkit/contents/openspec/changes/${{ steps.spec-ref.outputs.spec_ref }}/hltc.md \
             --jq '.content' | base64 -d > /tmp/hltc.md
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.DEVKIT_READ_TOKEN }}
 
       - name: Claude Code spec conformance review
         if: steps.spec-ref.outputs.spec_ref != ''
