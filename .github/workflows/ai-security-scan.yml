@@ -22,14 +22,27 @@ jobs:
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           prompt: |
-            Review this PR for security vulnerabilities. Focus on:
-            1. SQL injection (especially raw Sequelize queries)
-            2. Authentication/authorization bypasses
-            3. Sensitive data exposure (API keys, tokens, PII in logs)
-            4. Input validation gaps
-            5. IDOR (Insecure Direct Object References)
-            6. Rate limiting on new endpoints
+            Review this PR for security vulnerabilities in a NestJS + Sequelize
+            (PostgreSQL) API with Stripe payment integration.
 
-            Report only real, exploitable issues. Do not flag theoretical
-            concerns or style preferences. For each issue, state the file,
-            line, vulnerability type, and suggested fix.
+            Focus on:
+            1. SQL injection — especially raw Sequelize queries (sequelize.query,
+               Sequelize.literal) and dynamic column/table references
+            2. Authentication/authorization bypasses — missing guards, broken
+               role checks, JWT validation gaps
+            3. Sensitive data exposure — API keys, tokens, PII in logs, Stripe
+               secrets in responses
+            4. Input validation gaps — missing DTOs, unvalidated path/query
+               params, unsafe type coercion
+            5. IDOR — direct database lookups by user-supplied ID without
+               ownership verification (check that queries filter by the
+               authenticated user's tenant/fleet/warehouse scope)
+            6. Stripe webhook security — missing signature verification,
+               trusting unverified webhook payloads
+            7. Mass assignment — Sequelize create/update calls passing
+               unsanitized request body directly
+
+            Report only real, exploitable issues with concrete proof from the
+            diff. Do not flag theoretical concerns or style preferences. For
+            each issue provide: file, line, vulnerability type, severity
+            (critical/high/medium), and a suggested fix.
