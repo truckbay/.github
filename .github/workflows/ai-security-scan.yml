@@ -22,25 +22,27 @@ jobs:
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           prompt: |
-            Review this PR for security vulnerabilities in a NestJS + Sequelize
-            (PostgreSQL) API with Stripe payment integration.
+            Review this PR for security vulnerabilities in an Express 4 +
+            Sequelize 6 (PostgreSQL) API with Stripe payment integration.
 
             Focus on:
             1. SQL injection — especially raw Sequelize queries (sequelize.query,
                Sequelize.literal) and dynamic column/table references
-            2. Authentication/authorization bypasses — missing guards, broken
-               role checks, JWT validation gaps
+            2. Authentication/authorization bypasses — missing auth middleware
+               on routers, broken role checks, JWT validation gaps,
+               express-session misconfiguration
             3. Sensitive data exposure — API keys, tokens, PII in logs, Stripe
                secrets in responses
-            4. Input validation gaps — missing DTOs, unvalidated path/query
-               params, unsafe type coercion
+            4. Input validation gaps — missing express-validator chains on
+               routes, unvalidated path/query params, unsafe type coercion,
+               express-fileupload misuse (size/type limits, path traversal)
             5. IDOR — direct database lookups by user-supplied ID without
                ownership verification (check that queries filter by the
                authenticated user's tenant/fleet/warehouse scope)
             6. Stripe webhook security — missing signature verification,
                trusting unverified webhook payloads
             7. Mass assignment — Sequelize create/update calls passing
-               unsanitized request body directly
+               unsanitized req.body directly without an allowlist of fields
 
             Report only real, exploitable issues with concrete proof from the
             diff. Do not flag theoretical concerns or style preferences. For
