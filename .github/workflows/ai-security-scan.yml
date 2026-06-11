@@ -3,7 +3,9 @@ on:
   workflow_call:
     secrets:
       ANTHROPIC_API_KEY:
-        required: true
+        required: false
+      CLAUDE_CODE_OAUTH_TOKEN:
+        required: false
 
 jobs:
   security-review:
@@ -21,6 +23,7 @@ jobs:
         uses: anthropics/claude-code-action@v1
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           prompt: |
             Review this PR for security vulnerabilities in an Express 4 +
             Sequelize 6 (PostgreSQL) API with Stripe payment integration.
