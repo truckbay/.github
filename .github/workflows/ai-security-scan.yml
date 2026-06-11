@@ -17,6 +17,15 @@ jobs:
       issues: write
       id-token: write
     steps:
+      - name: Verify Anthropic auth is configured
+        env:
+          HAS_AUTH: ${{ secrets.ANTHROPIC_API_KEY != '' || secrets.CLAUDE_CODE_OAUTH_TOKEN != '' }}
+        run: |
+          if [ "$HAS_AUTH" != "true" ]; then
+            echo "::error::Neither ANTHROPIC_API_KEY nor CLAUDE_CODE_OAUTH_TOKEN is set (empty counts as unset). Configure one as an org or repo secret, then re-run."
+            exit 1
+          fi
+
       - uses: actions/checkout@v4
 
       - name: Claude Code security review
