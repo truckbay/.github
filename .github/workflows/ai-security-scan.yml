@@ -33,6 +33,9 @@ jobs:
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          track_progress: true
+          claude_args: |
+            --allowedTools "mcp__github_comment__update_claude_comment,mcp__github_inline_comment__create_inline_comment"
           prompt: |
             Review this PR for security vulnerabilities in an Express 4 +
             Sequelize 6 (PostgreSQL) API with Stripe payment integration.
@@ -61,8 +64,9 @@ jobs:
             each issue provide: file, line, vulnerability type, severity
             (critical/high/medium), and a suggested fix.
 
-            ALWAYS publish your result before finishing: post a single PR
-            comment (use your GitHub comment tools) titled
-            "## AI Security Review" containing every finding. If there are
-            no exploitable issues, the comment body must be exactly
-            "Security review: PASS". Never finish without posting the comment.
+            ALWAYS publish your result before finishing: update the Claude
+            tracking comment on this PR (mcp__github_comment__update_claude_comment)
+            so its final content starts with "## AI Security Review" and
+            contains every finding. If there are no exploitable issues, set
+            the comment body to exactly "Security review: PASS". Never finish
+            without updating the comment.
