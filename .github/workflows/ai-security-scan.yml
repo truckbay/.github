@@ -60,3 +60,9 @@ jobs:
             diff. Do not flag theoretical concerns or style preferences. For
             each issue provide: file, line, vulnerability type, severity
             (critical/high/medium), and a suggested fix.
+
+            ALWAYS publish your result before finishing: post a single PR
+            comment (use your GitHub comment tools) titled
+            "## AI Security Review" containing every finding. If there are
+            no exploitable issues, the comment body must be exactly
+            "Security review: PASS". Never finish without posting the comment.
