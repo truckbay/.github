@@ -86,4 +86,10 @@ jobs:
             5. Architectural placement matches the spec
 
             Report ONLY discrepancies. Do NOT evaluate code style or quality
-            (CodeRabbit handles that). If everything conforms, say "Spec conformance: PASS".
+            (CodeRabbit handles that).
+
+            ALWAYS publish your result before finishing: post a single PR
+            comment (use your GitHub comment tools) titled
+            "## Spec Conformance Review" listing every discrepancy. If
+            everything conforms, the comment body must be exactly
+            "Spec conformance: PASS". Never finish without posting the comment.
