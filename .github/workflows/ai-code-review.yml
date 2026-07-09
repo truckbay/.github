@@ -60,11 +60,24 @@ jobs:
             echo "available=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Fetch HLTC from devkit
+      - name: Fetch spec contract from devkit
         if: steps.spec-ref.outputs.spec_ref != '' && steps.check-token.outputs.available == 'true'
         run: |
-          gh api "repos/truckbay/truckbays-devkit/contents/openspec/changes/${{ steps.spec-ref.outputs.spec_ref }}/hltc.md" \
-            --jq '.content' | base64 -d > /tmp/hltc.md
+          # Tier 2 changes ship hltc.md; Tier 1 changes ship bugfix-spec.md instead.
+          # The [ -s ] guard rejects an empty download so a 404 body never counts as success.
+          fetch() {
+            gh api "repos/truckbay/truckbays-devkit/contents/openspec/changes/${{ steps.spec-ref.outputs.spec_ref }}/$1" \
+              --jq '.content' 2>/dev/null | base64 -d > /tmp/hltc.md 2>/dev/null
+            [ -s /tmp/hltc.md ]
+          }
+          if fetch hltc.md; then
+            echo "Fetched hltc.md (Tier 2 contract)."
+          elif fetch bugfix-spec.md; then
+            echo "Fetched bugfix-spec.md (Tier 1 contract)."
+          else
+            echo "::error::Neither hltc.md nor bugfix-spec.md found for '${{ steps.spec-ref.outputs.spec_ref }}' on truckbays-devkit main."
+            exit 1
+          fi
         env:
           GH_TOKEN: ${{ secrets.DEVKIT_READ_TOKEN }}
 
@@ -79,7 +92,8 @@ jobs:
             --allowedTools "mcp__github_comment__update_claude_comment,mcp__github_inline_comment__create_inline_comment"
           prompt: |
             You are a spec-conformance reviewer. Review this PR against the
-            High-Level Technical Contract at /tmp/hltc.md.
+            approved contract at /tmp/hltc.md (a Tier 2 High-Level Technical
+            Contract, or a Tier 1 bugfix spec — same authority either way).
 
             Check:
             1. All requirements from the HLTC are implemented
