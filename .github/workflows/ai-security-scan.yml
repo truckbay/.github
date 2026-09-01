@@ -28,7 +28,43 @@ jobs:
 
       - uses: actions/checkout@v4
 
+      - name: Guard — calling workflow must match the default branch (TRU-4221)
+        if: github.event_name == 'pull_request'
+        env:
+          WORKFLOW_REF: ${{ github.workflow_ref }}
+          REPO: ${{ github.repository }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          BASE_BRANCH: ${{ github.base_ref }}
+        run: |
+          # claude-code-action's OIDC→App token exchange validates the CALLING
+          # workflow file against the repository's DEFAULT branch. On a mismatch
+          # the action does not fail: it logs "Skipping action due to workflow
+          # validation" and exits SUCCESS, so the review silently skips while the
+          # check stays green. After the TRU-3648 pin bump that was every develop
+          # PR of truckbays-api for 25 days (TRU-4221). Compare the three copies
+          # of the calling file — PR head, PR base branch, default branch — and
+          # make the skip loud BEFORE the Claude step can swallow it.
+          FILE=${WORKFLOW_REF#"$REPO/"}
+          FILE=${FILE%%@*}
+          if ! git fetch --no-tags --depth=1 origin \
+              "+refs/heads/${DEFAULT_BRANCH}:refs/remotes/guard/default" \
+              "+refs/heads/${BASE_BRANCH}:refs/remotes/guard/base"; then
+            echo "::error::Could not fetch ${DEFAULT_BRANCH} and ${BASE_BRANCH} to compare ${FILE}; the divergence guard cannot run."
+            exit 1
+          fi
+          if git diff --quiet HEAD guard/default -- "$FILE"; then
+            echo "::notice::${FILE} is identical to ${DEFAULT_BRANCH}; claude-code-action's workflow validation will pass and the review below is real."
+            exit 0
+          fi
+          if ! git diff --quiet HEAD guard/base -- "$FILE"; then
+            echo "::warning::This PR edits ${FILE}, so claude-code-action WILL SKIP the AI review on this PR (its token exchange requires the calling workflow to be identical to ${DEFAULT_BRANCH}) — a green check here is a skip, not a review. Land the identical file on ${DEFAULT_BRANCH} back-to-back (twin PR), then close/reopen this PR to exercise the review (TRU-4221)."
+            exit 0
+          fi
+          echo "::error::${BASE_BRANCH}:${FILE} differs from ${DEFAULT_BRANCH}:${FILE}. claude-code-action skips BOTH AI reviews on EVERY PR into ${BASE_BRANCH} while reporting green, until the two copies are identical. Open the twin PR that lands ${BASE_BRANCH}'s copy on ${DEFAULT_BRANCH} and merge it before trusting any AI review on this branch (TRU-4221)."
+          exit 1
+
       - name: Claude Code security review
+        id: claude
         uses: anthropics/claude-code-action@v1
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
@@ -70,3 +106,37 @@ jobs:
             contains every finding. If there are no exploitable issues, set
             the comment body to exactly "Security review: PASS". Never finish
             without updating the comment.
+
+      - name: Diagnose a Claude refusal (TRU-4176)
+        if: failure() && steps.claude.outcome == 'failure'
+        env:
+          EXECUTION_FILE: ${{ steps.claude.outputs.execution_file }}
+          HAS_API_KEY: ${{ secrets.ANTHROPIC_API_KEY != '' }}
+          HAS_OAUTH: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN != '' }}
+        run: |
+          # claude-code-action reports "Claude result reported subtype success
+          # with is_error:true" for every failure class alike. When the result
+          # also shows no model usage — at most 1 turn, $0, empty modelUsage —
+          # the API refused the request before any model ran: an invalid or
+          # expired credential, a subscription usage cap, a billing block. That
+          # is never a review verdict and never this PR's diff. Say so, and name
+          # which credential was live: the 2026-08-24→26 outage (TRU-4176) took
+          # an investigation to reach exactly this sentence.
+          if [ -z "$EXECUTION_FILE" ] || [ ! -s "$EXECUTION_FILE" ]; then
+            echo "::warning::No Claude execution output to diagnose — the action failed before Claude ran. Read the Claude step log."
+            exit 0
+          fi
+          RESULT=$(jq -c '[ .[] | select(.type == "result") ] | last // empty' "$EXECUTION_FILE" 2>/dev/null || true)
+          if [ -z "$RESULT" ]; then
+            echo "::warning::Claude execution output holds no result record — the run died before Claude produced one. Read the Claude step log."
+            exit 0
+          fi
+          TURNS=$(printf '%s' "$RESULT" | jq -r '.num_turns // 0')
+          COST=$(printf '%s' "$RESULT" | jq -r '.total_cost_usd // 0')
+          REFUSED=$(printf '%s' "$RESULT" | jq -r '(.is_error == true) and ((.num_turns // 0) <= 1) and ((.total_cost_usd // 0) == 0) and (((.modelUsage // {}) | length) == 0)')
+          TEXT=$(printf '%s' "$RESULT" | jq -r '(.result // "") | tostring | .[0:300]')
+          if [ "$REFUSED" = "true" ]; then
+            echo "::error::Claude was REFUSED before any model call (is_error, ${TURNS} turn(s), \$${COST}, no model usage): a credential or subscription failure — not a review verdict and unrelated to this PR's diff. Live credential: ANTHROPIC_API_KEY set=${HAS_API_KEY}, CLAUDE_CODE_OAUTH_TOKEN set=${HAS_OAUTH}. API text: '${TEXT:-none}'. Check that credential's account (token expiry, subscription usage cap, billing) and status.claude.com, then re-run the failed checks. Precedent: TRU-4176."
+          else
+            echo "::notice::Claude did run (${TURNS} turn(s), \$${COST}) before failing — a review or runtime outcome, not a credential refusal. Read the Claude step log."
+          fi
