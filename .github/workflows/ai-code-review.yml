@@ -18,7 +18,6 @@ jobs:
       pull-requests: write
       issues: write
       id-token: write
-    if: contains(github.event.pull_request.body, 'Spec:')
     steps:
       - name: Verify Anthropic auth is configured
         env:
@@ -36,20 +35,97 @@ jobs:
         env:
           PR_BODY: ${{ github.event.pull_request.body }}
         run: |
-          SPEC_REF=$(echo "$PR_BODY" | grep -oP 'Spec:\s*\K\S+' || echo "")
-          if [ -n "$SPEC_REF" ] && ! [[ "$SPEC_REF" =~ ^[A-Za-z0-9._-]+$ ]]; then
-            echo "::error::Invalid spec reference format: '$SPEC_REF'"
+          # Accepted forms (the FIRST 'Spec:' occurrence in the body wins;
+          # backticks are tolerated and stripped — TRU-4009):
+          #   Spec: TRU-XXXX-<feature-name>   canonical: devkit change folder
+          #   Spec: <repo-relative-path>      spec/design doc (or folder holding
+          #                                   hltc.md/bugfix-spec.md) in THIS
+          #                                   repo's checkout (TRU-4009 rider 2:
+          #                                   teams that brainstorm in-repo)
+          #   Spec: openspec/...              devkit path, mapped to its
+          #                                   change-folder name
+          #   Spec: none — <reason>           explicit opt-out, passes visibly
+          # A MISSING marker hard-fails: it used to SKIP the job, which sat
+          # beside green checks and read as benign (TRU-4009).
+          if ! printf '%s' "$PR_BODY" | grep -q 'Spec:'; then
+            echo "::error::No 'Spec:' marker found in the PR body. Every PR needs one: write 'Spec: TRU-XXXX-<change-folder-name>' — the bare folder name under openspec/changes/, no path, no backticks (the PR-body template in truckbays-devkit ai-specs/.commands/deploy-feature.md step 6 emits it correctly) — or a repo-relative path to an in-repo spec. For a deliberately spec-less PR (CI pin bump, revert) write 'Spec: none — <reason>'. Note: editing the PR body does NOT re-run this check ('edited' is not a trigger, and 'gh run rerun' replays the stale payload) — push an empty commit to re-fire it."
             exit 1
           fi
-          echo "spec_ref=$SPEC_REF" >> "$GITHUB_OUTPUT"
-          if [ -z "$SPEC_REF" ]; then
-            echo "No spec reference found in PR body. Skipping conformance check."
+          # First occurrence only: prose may legitimately MENTION 'Spec:' again
+          # further down (TRU-4009 rider 1 — truckbays-api PR 1545 broke on
+          # exactly that, with a multi-line capture masquerading as one ref).
+          RAW=$(printf '%s' "$PR_BODY" | grep -m1 -oP 'Spec:\s*\K.*' | head -n1 || true)
+          # Normalize: drop CR (GitHub bodies are CRLF), strip backticks, take
+          # the first whitespace-delimited token.
+          CLEANED=${RAW//$'\r'/}
+          CLEANED=${CLEANED//\`/}
+          read -r SPEC_REF _ <<<"$CLEANED" || true
+          SPEC_REF=${SPEC_REF:-}
+          reject() { # $1 = reason. %q makes newlines/tabs in the capture visible.
+            printf '::error::Invalid spec reference (%s) — raw capture (escapes visible): %q. Expected the bare change-folder name (e.g. Spec: TRU-3997-staff-invoice-mailing-address), a repo-relative path to an in-repo spec, or Spec: none — <reason>. Template: ai-specs/.commands/deploy-feature.md step 6 in truckbays-devkit. Editing the PR body does NOT re-run this check — push an empty commit to re-fire it.\n' "$1" "$RAW"
+            exit 1
+          }
+          if [ "${SPEC_REF,,}" = "none" ]; then
+            echo "::notice::'Spec: none' — conformance review explicitly skipped by the PR author. Use only for PRs that genuinely have no spec (CI pin bumps, reverts)."
+            echo "spec_ref=" >> "$GITHUB_OUTPUT"
+            echo "spec_kind=" >> "$GITHUB_OUTPUT"
             exit 0
           fi
+          if [[ "$SPEC_REF" == */* ]]; then
+            # Path form. Safety first: this value is used in local file checks
+            # (and, on the devkit fallback, reduced to a charset-safe name).
+            [[ "$SPEC_REF" =~ ^[A-Za-z0-9._/-]+$ ]] || reject "illegal characters in path"
+            [[ "$SPEC_REF" == /* ]] && reject "absolute paths not allowed"
+            [[ "/$SPEC_REF/" == *"/../"* ]] && reject "'..' segments not allowed"
+            SPEC_REF=${SPEC_REF#./}
+            if [ -e "$SPEC_REF" ]; then
+              # In-repo spec: the doc (or change folder) lives in this repo.
+              echo "::notice::Spec reference resolves in-repo: '${SPEC_REF}'."
+              echo "spec_ref=$SPEC_REF" >> "$GITHUB_OUTPUT"
+              echo "spec_kind=repo" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            # Devkit-shaped path: map to its change-folder component
+            # ([YYYY-MM-DD-]TRU-NNNN-<name>, date prefix dropped so archived
+            # refs still resolve through the normal archive lookup).
+            MAPPED=""
+            IFS='/' read -ra PARTS <<<"$SPEC_REF"
+            for part in "${PARTS[@]}"; do
+              if [[ "$part" =~ ^([0-9]{4}-[0-9]{2}-[0-9]{2}-)?(TRU-[0-9]+[A-Za-z0-9._-]*)$ ]]; then
+                MAPPED="${BASH_REMATCH[2]}"
+                break
+              fi
+            done
+            [ -n "$MAPPED" ] || reject "path not found in this repo and no TRU-XXXX change-folder component to map to the devkit"
+            echo "::notice::Spec reference was written as a devkit path; using change-folder name '${MAPPED}'. Canonical form: 'Spec: ${MAPPED}'."
+            SPEC_REF="$MAPPED"
+          fi
+          [[ "$SPEC_REF" =~ ^[A-Za-z0-9._-]+$ ]] || reject "illegal characters"
+          echo "spec_ref=$SPEC_REF" >> "$GITHUB_OUTPUT"
+          echo "spec_kind=devkit" >> "$GITHUB_OUTPUT"
+
+      - name: Resolve in-repo spec
+        id: resolve-repo
+        if: steps.spec-ref.outputs.spec_kind == 'repo'
+        env:
+          SPEC_REF: ${{ steps.spec-ref.outputs.spec_ref }}
+        run: |
+          if [ -f "$SPEC_REF" ]; then
+            cp "$SPEC_REF" /tmp/hltc.md
+          elif [ -f "$SPEC_REF/hltc.md" ]; then
+            cp "$SPEC_REF/hltc.md" /tmp/hltc.md
+          elif [ -f "$SPEC_REF/bugfix-spec.md" ]; then
+            cp "$SPEC_REF/bugfix-spec.md" /tmp/hltc.md
+          else
+            echo "::error::In-repo spec '$SPEC_REF' is a directory holding neither hltc.md nor bugfix-spec.md."
+            exit 1
+          fi
+          [ -s /tmp/hltc.md ] || { echo "::error::In-repo spec '$SPEC_REF' is empty."; exit 1; }
+          echo "Resolved in-repo spec '$SPEC_REF'."
 
       - name: Check DEVKIT_READ_TOKEN availability
         id: check-token
-        if: steps.spec-ref.outputs.spec_ref != ''
+        if: steps.spec-ref.outputs.spec_kind == 'devkit'
         env:
           HAS_TOKEN: ${{ secrets.DEVKIT_READ_TOKEN != '' }}
         run: |
@@ -62,7 +138,7 @@ jobs:
 
       - name: Fetch spec contract from devkit
         id: fetch-spec
-        if: steps.spec-ref.outputs.spec_ref != '' && steps.check-token.outputs.available == 'true'
+        if: steps.spec-ref.outputs.spec_kind == 'devkit' && steps.check-token.outputs.available == 'true'
         run: |
           # Tier 2 changes ship hltc.md; Tier 1 changes ship bugfix-spec.md instead.
           # The [ -s ] guard rejects an empty download so a 404 body never counts as success.
@@ -123,7 +199,7 @@ jobs:
           SPEC_REF: ${{ steps.spec-ref.outputs.spec_ref }}
 
       - name: Claude Code spec conformance review
-        if: steps.spec-ref.outputs.spec_ref != '' && steps.check-token.outputs.available == 'true'
+        if: steps.spec-ref.outputs.spec_ref != '' && (steps.spec-ref.outputs.spec_kind == 'repo' || steps.check-token.outputs.available == 'true')
         uses: anthropics/claude-code-action@v1
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
@@ -134,14 +210,19 @@ jobs:
           prompt: |
             You are a spec-conformance reviewer. Review this PR against the
             approved contract at /tmp/hltc.md (a Tier 2 High-Level Technical
-            Contract, or a Tier 1 bugfix spec — same authority either way).
+            Contract, a Tier 1 bugfix spec, or an in-repo spec/design doc —
+            same authority either way).
 
-            The contract's lifecycle state is "${{ steps.fetch-spec.outputs.spec_state }}".
+            The contract's lifecycle state is "${{ steps.spec-ref.outputs.spec_kind == 'repo' && 'in-repo' || steps.fetch-spec.outputs.spec_state }}".
             "live" means the change is still open: review as usual.
             "archived" means the change already shipped and this PR is a
             follow-up amending it: divergences from the shipped contract are
             expected amendments, not suspicious — still list every discrepancy
             so the reviewer can judge them.
+            "in-repo" means the contract lives in this repository itself
+            (a spec or design doc authored beside the code): review as usual,
+            but the doc may be a design doc rather than a formal HLTC — hold
+            the PR to what the doc actually specifies, no more.
 
             Check:
             1. All requirements from the HLTC are implemented
