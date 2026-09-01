@@ -18,7 +18,6 @@ jobs:
       pull-requests: write
       issues: write
       id-token: write
-    if: contains(github.event.pull_request.body, 'Spec:')
     steps:
       - name: Verify Anthropic auth is configured
         env:
@@ -36,16 +35,53 @@ jobs:
         env:
           PR_BODY: ${{ github.event.pull_request.body }}
         run: |
-          SPEC_REF=$(echo "$PR_BODY" | grep -oP 'Spec:\s*\K\S+' || echo "")
-          if [ -n "$SPEC_REF" ] && ! [[ "$SPEC_REF" =~ ^[A-Za-z0-9._-]+$ ]]; then
-            echo "::error::Invalid spec reference format: '$SPEC_REF'"
+          # Accepted forms (backticks are tolerated and stripped — TRU-4009):
+          #   Spec: TRU-XXXX-<feature-name>   canonical: devkit change folder
+          #   Spec: openspec/...              devkit path, mapped to its
+          #                                   change-folder name
+          #   Spec: none — <reason>           explicit opt-out, passes visibly
+          # A MISSING marker hard-fails: it used to SKIP the job, which sat
+          # beside green checks and read as benign (TRU-4009).
+          if ! printf '%s' "$PR_BODY" | grep -q 'Spec:'; then
+            echo "::error::No 'Spec:' marker found in the PR body. Every PR needs one: write 'Spec: TRU-XXXX-<change-folder-name>' — the bare folder name under openspec/changes/, no path, no backticks (the PR-body template in truckbays-devkit ai-specs/.commands/deploy-feature.md step 6 emits it correctly). For a deliberately spec-less PR (CI pin bump, revert) write 'Spec: none — <reason>'. Note: editing the PR body does NOT re-run this check ('edited' is not a trigger, and 'gh run rerun' replays the stale payload) — push an empty commit to re-fire it."
+            exit 1
+          fi
+          RAW=$(printf '%s' "$PR_BODY" | grep -m1 -oP 'Spec:\s*\K.*' | head -n1 || true)
+          # Normalize: drop CR (GitHub bodies are CRLF), strip backticks, take
+          # the first whitespace-delimited token.
+          CLEANED=${RAW//$'\r'/}
+          CLEANED=${CLEANED//\`/}
+          read -r SPEC_REF _ <<<"$CLEANED" || true
+          SPEC_REF=${SPEC_REF:-}
+          if [ "${SPEC_REF,,}" = "none" ]; then
+            echo "::notice::'Spec: none' — conformance review explicitly skipped by the PR author. Use only for PRs that genuinely have no spec (CI pin bumps, reverts)."
+            echo "spec_ref=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [[ "$SPEC_REF" == */* ]]; then
+            # Devkit-shaped path: map to its change-folder component
+            # ([YYYY-MM-DD-]TRU-NNNN-<name>, date prefix dropped so archived
+            # refs still resolve through the normal archive lookup).
+            MAPPED=""
+            IFS='/' read -ra PARTS <<<"$SPEC_REF"
+            for part in "${PARTS[@]}"; do
+              if [[ "$part" =~ ^([0-9]{4}-[0-9]{2}-[0-9]{2}-)?(TRU-[0-9]+[A-Za-z0-9._-]*)$ ]]; then
+                MAPPED="${BASH_REMATCH[2]}"
+                break
+              fi
+            done
+            if [ -z "$MAPPED" ]; then
+              echo "::error::Invalid spec reference: '$SPEC_REF' — the path names no TRU-XXXX change-folder component. Expected the bare change-folder name (e.g. Spec: TRU-3997-staff-invoice-mailing-address) or Spec: none — <reason>. Template: ai-specs/.commands/deploy-feature.md step 6 in truckbays-devkit. Editing the PR body does NOT re-run this check — push an empty commit to re-fire it."
+              exit 1
+            fi
+            echo "::notice::Spec reference was written as a devkit path; using change-folder name '${MAPPED}'. Canonical form: 'Spec: ${MAPPED}'."
+            SPEC_REF="$MAPPED"
+          fi
+          if ! [[ "$SPEC_REF" =~ ^[A-Za-z0-9._-]+$ ]]; then
+            echo "::error::Invalid spec reference: '$SPEC_REF' — expected the bare change-folder name (e.g. Spec: TRU-3997-staff-invoice-mailing-address) or Spec: none — <reason>. Template: ai-specs/.commands/deploy-feature.md step 6 in truckbays-devkit. Editing the PR body does NOT re-run this check — push an empty commit to re-fire it."
             exit 1
           fi
           echo "spec_ref=$SPEC_REF" >> "$GITHUB_OUTPUT"
-          if [ -z "$SPEC_REF" ]; then
-            echo "No spec reference found in PR body. Skipping conformance check."
-            exit 0
-          fi
 
       - name: Check DEVKIT_READ_TOKEN availability
         id: check-token
