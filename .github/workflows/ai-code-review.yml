@@ -69,8 +69,18 @@ jobs:
           # SPEC_REF arrives via env (never inline-interpolated into the script) and is
           # charset-validated upstream to ^[A-Za-z0-9._-]+$.
           fetch() { # $1 = change folder path from repo root, $2 = contract filename
-            gh api "repos/truckbay/truckbays-devkit/contents/$1/$2" \
-              --jq '.content' 2>/dev/null | base64 -d > /tmp/hltc.md 2>/dev/null
+            local err
+            if ! err=$(gh api "repos/truckbay/truckbays-devkit/contents/$1/$2" \
+              --jq '.content' 2>&1 >/tmp/hltc.b64); then
+              # Only a 404 means "contract absent here" and may fall through to the
+              # archive; any other API failure must surface, never masquerade as a miss.
+              if printf '%s' "$err" | grep -q 'HTTP 404'; then
+                return 1
+              fi
+              echo "::error::GitHub API failure fetching $1/$2 (not a 404): $err"
+              exit 1
+            fi
+            base64 -d < /tmp/hltc.b64 > /tmp/hltc.md 2>/dev/null
             [ -s /tmp/hltc.md ]
           }
           resolve() { # $1 = change folder path from repo root
@@ -90,8 +100,16 @@ jobs:
           # implementation PR merges; follow-up PRs on the same ticket still name <name>.
           # Given the upstream charset validation, '.' is SPEC_REF's only regex metachar.
           REF_RE=$(printf '%s' "$SPEC_REF" | sed 's/\./\\./g')
-          ARCHIVED=$(gh api "repos/truckbay/truckbays-devkit/contents/openspec/archive" \
-            --jq '.[].name' 2>/dev/null \
+          if ! ARCHIVE_LIST=$(gh api "repos/truckbay/truckbays-devkit/contents/openspec/archive" \
+            --jq '.[].name' 2>&1); then
+            if printf '%s' "$ARCHIVE_LIST" | grep -q 'HTTP 404'; then
+              ARCHIVE_LIST="" # no archive directory at all — same as no match
+            else
+              echo "::error::GitHub API failure listing openspec/archive: $ARCHIVE_LIST"
+              exit 1
+            fi
+          fi
+          ARCHIVED=$(printf '%s\n' "$ARCHIVE_LIST" \
             | grep -E "^[0-9]{4}-[0-9]{2}-[0-9]{2}-${REF_RE}$" | sort | tail -n 1)
           if [ -n "$ARCHIVED" ] && resolve "openspec/archive/${ARCHIVED}"; then
             echo "::notice::Spec '${SPEC_REF}' resolved from the ARCHIVE (${ARCHIVED}): this PR follows up on a change that already shipped, so divergences from the contract are expected amendments."
