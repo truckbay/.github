@@ -46,6 +46,9 @@ jobs:
             echo "::error::No 'Spec:' marker found in the PR body. Every PR needs one: write 'Spec: TRU-XXXX-<change-folder-name>' — the bare folder name under openspec/changes/, no path, no backticks (the PR-body template in truckbays-devkit ai-specs/.commands/deploy-feature.md step 6 emits it correctly). For a deliberately spec-less PR (CI pin bump, revert) write 'Spec: none — <reason>'. Note: editing the PR body does NOT re-run this check ('edited' is not a trigger, and 'gh run rerun' replays the stale payload) — push an empty commit to re-fire it."
             exit 1
           fi
+          # First occurrence only: prose may legitimately MENTION 'Spec:' again
+          # further down (TRU-4009 rider 1 — truckbays-api PR 1545 broke on
+          # exactly that, with a multi-line capture masquerading as one ref).
           RAW=$(printf '%s' "$PR_BODY" | grep -m1 -oP 'Spec:\s*\K.*' | head -n1 || true)
           # Normalize: drop CR (GitHub bodies are CRLF), strip backticks, take
           # the first whitespace-delimited token.
@@ -53,6 +56,10 @@ jobs:
           CLEANED=${CLEANED//\`/}
           read -r SPEC_REF _ <<<"$CLEANED" || true
           SPEC_REF=${SPEC_REF:-}
+          reject() { # $1 = reason. %q makes newlines/tabs in the capture visible.
+            printf '::error::Invalid spec reference (%s) — raw capture (escapes visible): %q. Expected the bare change-folder name (e.g. Spec: TRU-3997-staff-invoice-mailing-address) or Spec: none — <reason>. Template: ai-specs/.commands/deploy-feature.md step 6 in truckbays-devkit. Editing the PR body does NOT re-run this check — push an empty commit to re-fire it.\n' "$1" "$RAW"
+            exit 1
+          }
           if [ "${SPEC_REF,,}" = "none" ]; then
             echo "::notice::'Spec: none' — conformance review explicitly skipped by the PR author. Use only for PRs that genuinely have no spec (CI pin bumps, reverts)."
             echo "spec_ref=" >> "$GITHUB_OUTPUT"
@@ -70,17 +77,11 @@ jobs:
                 break
               fi
             done
-            if [ -z "$MAPPED" ]; then
-              echo "::error::Invalid spec reference: '$SPEC_REF' — the path names no TRU-XXXX change-folder component. Expected the bare change-folder name (e.g. Spec: TRU-3997-staff-invoice-mailing-address) or Spec: none — <reason>. Template: ai-specs/.commands/deploy-feature.md step 6 in truckbays-devkit. Editing the PR body does NOT re-run this check — push an empty commit to re-fire it."
-              exit 1
-            fi
+            [ -n "$MAPPED" ] || reject "path names no TRU-XXXX change-folder component"
             echo "::notice::Spec reference was written as a devkit path; using change-folder name '${MAPPED}'. Canonical form: 'Spec: ${MAPPED}'."
             SPEC_REF="$MAPPED"
           fi
-          if ! [[ "$SPEC_REF" =~ ^[A-Za-z0-9._-]+$ ]]; then
-            echo "::error::Invalid spec reference: '$SPEC_REF' — expected the bare change-folder name (e.g. Spec: TRU-3997-staff-invoice-mailing-address) or Spec: none — <reason>. Template: ai-specs/.commands/deploy-feature.md step 6 in truckbays-devkit. Editing the PR body does NOT re-run this check — push an empty commit to re-fire it."
-            exit 1
-          fi
+          [[ "$SPEC_REF" =~ ^[A-Za-z0-9._-]+$ ]] || reject "illegal characters"
           echo "spec_ref=$SPEC_REF" >> "$GITHUB_OUTPUT"
 
       - name: Check DEVKIT_READ_TOKEN availability
