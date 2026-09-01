@@ -30,6 +30,41 @@ jobs:
 
       - uses: actions/checkout@v4
 
+      - name: Guard — calling workflow must match the default branch (TRU-4221)
+        if: github.event_name == 'pull_request'
+        env:
+          WORKFLOW_REF: ${{ github.workflow_ref }}
+          REPO: ${{ github.repository }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          BASE_BRANCH: ${{ github.base_ref }}
+        run: |
+          # claude-code-action's OIDC→App token exchange validates the CALLING
+          # workflow file against the repository's DEFAULT branch. On a mismatch
+          # the action does not fail: it logs "Skipping action due to workflow
+          # validation" and exits SUCCESS, so the review silently skips while the
+          # check stays green. After the TRU-3648 pin bump that was every develop
+          # PR of truckbays-api for 25 days (TRU-4221). Compare the three copies
+          # of the calling file — PR head, PR base branch, default branch — and
+          # make the skip loud BEFORE the Claude step can swallow it.
+          FILE=${WORKFLOW_REF#"$REPO/"}
+          FILE=${FILE%%@*}
+          if ! git fetch --no-tags --depth=1 origin \
+              "+refs/heads/${DEFAULT_BRANCH}:refs/remotes/guard/default" \
+              "+refs/heads/${BASE_BRANCH}:refs/remotes/guard/base"; then
+            echo "::error::Could not fetch ${DEFAULT_BRANCH} and ${BASE_BRANCH} to compare ${FILE}; the divergence guard cannot run."
+            exit 1
+          fi
+          if git diff --quiet HEAD guard/default -- "$FILE"; then
+            echo "::notice::${FILE} is identical to ${DEFAULT_BRANCH}; claude-code-action's workflow validation will pass and the review below is real."
+            exit 0
+          fi
+          if ! git diff --quiet HEAD guard/base -- "$FILE"; then
+            echo "::warning::This PR edits ${FILE}, so claude-code-action WILL SKIP the AI review on this PR (its token exchange requires the calling workflow to be identical to ${DEFAULT_BRANCH}) — a green check here is a skip, not a review. Land the identical file on ${DEFAULT_BRANCH} back-to-back (twin PR), then close/reopen this PR to exercise the review (TRU-4221)."
+            exit 0
+          fi
+          echo "::error::${BASE_BRANCH}:${FILE} differs from ${DEFAULT_BRANCH}:${FILE}. claude-code-action skips BOTH AI reviews on EVERY PR into ${BASE_BRANCH} while reporting green, until the two copies are identical. Open the twin PR that lands ${BASE_BRANCH}'s copy on ${DEFAULT_BRANCH} and merge it before trusting any AI review on this branch (TRU-4221)."
+          exit 1
+
       - name: Extract spec reference from PR body
         id: spec-ref
         env:
