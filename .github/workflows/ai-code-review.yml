@@ -61,25 +61,48 @@ jobs:
           fi
 
       - name: Fetch spec contract from devkit
+        id: fetch-spec
         if: steps.spec-ref.outputs.spec_ref != '' && steps.check-token.outputs.available == 'true'
         run: |
           # Tier 2 changes ship hltc.md; Tier 1 changes ship bugfix-spec.md instead.
           # The [ -s ] guard rejects an empty download so a 404 body never counts as success.
-          fetch() {
-            gh api "repos/truckbay/truckbays-devkit/contents/openspec/changes/${{ steps.spec-ref.outputs.spec_ref }}/$1" \
+          # SPEC_REF arrives via env (never inline-interpolated into the script) and is
+          # charset-validated upstream to ^[A-Za-z0-9._-]+$.
+          fetch() { # $1 = change folder path from repo root, $2 = contract filename
+            gh api "repos/truckbay/truckbays-devkit/contents/$1/$2" \
               --jq '.content' 2>/dev/null | base64 -d > /tmp/hltc.md 2>/dev/null
             [ -s /tmp/hltc.md ]
           }
-          if fetch hltc.md; then
-            echo "Fetched hltc.md (Tier 2 contract)."
-          elif fetch bugfix-spec.md; then
-            echo "Fetched bugfix-spec.md (Tier 1 contract)."
+          resolve() { # $1 = change folder path from repo root
+            if fetch "$1" hltc.md; then
+              echo "Fetched $1/hltc.md (Tier 2 contract)."
+            elif fetch "$1" bugfix-spec.md; then
+              echo "Fetched $1/bugfix-spec.md (Tier 1 contract)."
+            else
+              return 1
+            fi
+          }
+          if resolve "openspec/changes/${SPEC_REF}"; then
+            echo "spec_state=live" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # Archived changes move to openspec/archive/<YYYY-MM-DD>-<name>/ once the
+          # implementation PR merges; follow-up PRs on the same ticket still name <name>.
+          # Given the upstream charset validation, '.' is SPEC_REF's only regex metachar.
+          REF_RE=$(printf '%s' "$SPEC_REF" | sed 's/\./\\./g')
+          ARCHIVED=$(gh api "repos/truckbay/truckbays-devkit/contents/openspec/archive" \
+            --jq '.[].name' 2>/dev/null \
+            | grep -E "^[0-9]{4}-[0-9]{2}-[0-9]{2}-${REF_RE}$" | sort | tail -n 1)
+          if [ -n "$ARCHIVED" ] && resolve "openspec/archive/${ARCHIVED}"; then
+            echo "::notice::Spec '${SPEC_REF}' resolved from the ARCHIVE (${ARCHIVED}): this PR follows up on a change that already shipped, so divergences from the contract are expected amendments."
+            echo "spec_state=archived" >> "$GITHUB_OUTPUT"
           else
-            echo "::error::Neither hltc.md nor bugfix-spec.md found for '${{ steps.spec-ref.outputs.spec_ref }}' on truckbays-devkit main."
+            echo "::error::Neither hltc.md nor bugfix-spec.md found for '${SPEC_REF}' on truckbays-devkit main (checked openspec/changes/ and openspec/archive/)."
             exit 1
           fi
         env:
           GH_TOKEN: ${{ secrets.DEVKIT_READ_TOKEN }}
+          SPEC_REF: ${{ steps.spec-ref.outputs.spec_ref }}
 
       - name: Claude Code spec conformance review
         if: steps.spec-ref.outputs.spec_ref != '' && steps.check-token.outputs.available == 'true'
@@ -95,6 +118,13 @@ jobs:
             approved contract at /tmp/hltc.md (a Tier 2 High-Level Technical
             Contract, or a Tier 1 bugfix spec — same authority either way).
 
+            The contract's lifecycle state is "${{ steps.fetch-spec.outputs.spec_state }}".
+            "live" means the change is still open: review as usual.
+            "archived" means the change already shipped and this PR is a
+            follow-up amending it: divergences from the shipped contract are
+            expected amendments, not suspicious — still list every discrepancy
+            so the reviewer can judge them.
+
             Check:
             1. All requirements from the HLTC are implemented
             2. No behavior beyond the approved contract was introduced
@@ -107,7 +137,9 @@ jobs:
 
             ALWAYS publish your result before finishing: update the Claude
             tracking comment on this PR (mcp__github_comment__update_claude_comment)
-            so its final content starts with "## Spec Conformance Review" and
-            lists every discrepancy. If everything conforms, set the comment
-            body to exactly "Spec conformance: PASS". Never finish without
-            updating the comment.
+            so its final content starts with "## Spec Conformance Review"
+            ("## Spec Conformance Review (archived spec)" when the state is
+            "archived") and lists every discrepancy. If everything conforms,
+            set the comment body to exactly "Spec conformance: PASS" — or
+            "Spec conformance: PASS (archived spec)" when the state is
+            "archived". Never finish without updating the comment.
